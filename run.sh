@@ -1,0 +1,1 @@
+uvicorn backend.server:app --host 0.0.0.0 --port 8000 --ssl-certfile ./backend/localhost+2.pem --ssl-keyfile ./backend/localhost+2-key.pem

@@ -1,0 +1,5 @@
+node_modules
+__pycache__
+frontend/fastrtc-demo/.next
+env/
+frontend/fastrtc-demo/node_modules/
