@@ -19,8 +19,9 @@ export function BackgroundCircleProvider() {
     const audioRef = useRef<HTMLAudioElement>(null);
     // 用于存储收到的LLM文本块
     const [llmChunks, setLlmChunks] = useState<string[]>([]);
-    // 当前正在显示的文本
+    // 当前正在显示的文本及其状态
     const [displayText, setDisplayText] = useState("");
+    const [fadeState, setFadeState] = useState("fade-in"); // 'fade-in' 或 'fade-out'
     // 打字机效果计时器与状态
     const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
     const currentIndexRef = useRef<number>(0);
@@ -74,50 +75,51 @@ export function BackgroundCircleProvider() {
         });
     }, []);
 
-    // 打字机效果函数，定义在组件外部避免重复创建
-    const typeWriter = useCallback(() => {
-        if (currentIndexRef.current < fullTextRef.current.length) {
-            // 使用函数式更新，避免依赖最新的state
-            setDisplayText(fullTextRef.current.substring(0, currentIndexRef.current + 1));
-            currentIndexRef.current++;
-            // 设置下一个字符的延迟，速度随机变化以模拟真实打字感觉
-            const delay = Math.random() * 30 + 20; // 20-50ms之间的随机延迟
-            typingTimerRef.current = setTimeout(typeWriter, delay);
-        }
-    }, []);
-    
-    // 打字机效果实现
+    // 淡入淡出效果的计时器引用
+    const fadeTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // 当文本块变化时实现淡入淡出效果
     useEffect(() => {
+        // 获取文本
+        const currentText = llmChunks.join("");
+        console.log("当前完整文本:", currentText, "长度:", currentText.length);
+        
         // 清除之前的计时器
-        if (typingTimerRef.current) {
-            clearTimeout(typingTimerRef.current);
+        if (fadeTimerRef.current) {
+            clearTimeout(fadeTimerRef.current);
+            fadeTimerRef.current = null;
+        }
+
+        if (!currentText) {
+            setDisplayText("");
+            setFadeState("fade-in");
+            return;
         }
         
-        // 如果有新的文本块，启动打字机效果
-        if (llmChunks.length > 0) {
-            // 保存完整文本到ref
-            fullTextRef.current = llmChunks[llmChunks.length - 1];
-            // 重置索引
-            currentIndexRef.current = 0;
-            // 重置显示文本
-            setDisplayText("");
+        // 如果有新文本，先淡出旧文本，然后设置新文本并淡入
+        if (displayText) {
+            // 先淡出
+            setFadeState("fade-out");
             
-            // 开始打字效果
-            typeWriter();
+            // 等待淡出动画完成后设置新文本并淡入
+            fadeTimerRef.current = setTimeout(() => {
+                setDisplayText(currentText);
+                setFadeState("fade-in");
+            }, 300); // 300ms淡出时间
         } else {
-            // 没有文本时清空显示
-            setDisplayText("");
-            fullTextRef.current = "";
-            currentIndexRef.current = 0;
+            // 如果没有旧文本，直接设置新文本并淡入
+            setDisplayText(currentText);
+            setFadeState("fade-in");
         }
         
-        // 组件卸载时清除计时器
+        // 组件卸载时清理
         return () => {
-            if (typingTimerRef.current) {
-                clearTimeout(typingTimerRef.current);
+            if (fadeTimerRef.current) {
+                clearTimeout(fadeTimerRef.current);
+                fadeTimerRef.current = null;
             }
         };
-    }, [llmChunks, typeWriter]); // 依赖于llmChunks的变化和typeWriter函数
+    }, [llmChunks, displayText]);
 
     // 使用SSE设置LLM文本块
     useEffect(() => {
@@ -139,7 +141,8 @@ export function BackgroundCircleProvider() {
                     console.log("收到LLM文本块 (SSE):", data);
                     
                     if (data.type === "llm_chunk") {
-                        setLlmChunks(prev => [...prev, data.content]);
+                        // 每次收到新的LLM块时，替换而不是追加
+                        setLlmChunks([data.content]);
                     }
                 } catch (error) {
                     console.error("解析SSE消息失败:", error);
@@ -240,7 +243,7 @@ export function BackgroundCircleProvider() {
             </div>
             
             {/* 使用Subtitle组件显示LLM文本块 */}
-            {displayText && <SubtitleWrapper text={displayText} />}
+            {displayText && <SubtitleWrapper text={displayText} fadeState={fadeState} />}
             
             {/* 连接ID显示 - 底部 */}
             {webrtcId && isConnected && (

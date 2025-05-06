@@ -8,8 +8,8 @@ const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-const cert = fs.readFileSync('./localhost+2.pem');
-const key = fs.readFileSync('./localhost+2-key.pem');
+const cert = fs.readFileSync('/home/cat/nextjs_voice_chat/backend/localhost+2.pem');
+const key = fs.readFileSync('/home/cat/nextjs_voice_chat/backend/localhost+2-key.pem');
 
 const options = { key, cert };
 

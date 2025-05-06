@@ -18,126 +18,19 @@ from backend.config import Config
 logging.basicConfig(level=logging.INFO)
 
 # 从配置模块获取环境变量
-LLM_API_KEY = Config.LLM_API_KEY
-ELEVENLABS_API_KEY = Config.ELEVENLABS_API_KEY
+LLM_API_KEY = Config().LLM_API_KEY
+ELEVENLABS_API_KEY = Config().ELEVENLABS_API_KEY
 import json
 from typing import Iterator, Tuple
 
-sys_prompt = """
-你是一位专业的儿童英语单词学习助手"智多星单词伙伴"。你的任务是帮助孩子们系统地学习英语单词，遵循以下学习流程：
-
-## 初始互动
-1. 欢迎孩子进入智多星单词世界，简短介绍自己
-2. 询问孩子想学习哪个分类的单词
-3. 如果孩子没有明确选择，你随机选择3类供孩子们选择：
-
-Section 1 基本常识
-- Part 1 时间与方位：时间、日期、方向与位置
-- Part 2 数字与度量衡：数字、数字相关、度量衡
-- Part 3 货币常识：各种货币、货币兑换
-- Part 4 自然常识：天气、颜色、环境、物质与材料
-- Part 5 应急常识：呼救、救助
-
-Section 2 居家生活
-- Part 1 日常饮食：早餐、正餐、烹调手法、厨房用具、调料与香料、味觉与嗅觉、餐具、饮料、茶、酒类、饼干与甜点、乳制品、谷物、豆类、坚果与干果
-- Part 2 水果、蔬菜与肉类：水果、蔬菜、肉类、海鲜
-- Part 3 日常家务：常用工具、做家务、维修除虫、清洁用品、缝纫与洗涤
-
-Section 3 日常生活
-- Part 1 城市：城市街景、街道、日常标志、城市建筑、城市广场、店铺与商厦
-- Part 2 生活：在银行、在邮局、在图书馆、在美发店、在幼儿园、在洗衣店、在加油站、在心理咨询中心、在法庭上、在警察局
-- Part 3 购物：购物、砍价与付款、在超市、在百货店、在便利店、在药店、在糖果店、在面包店、在花店、在手表店、在珠宝店、在电器行、在体育用品店、在玩具店、在礼品店、在宠物店
-- Part 4 餐饮：在中餐馆、中餐常见食品与菜品、在西餐厅、西餐常见食品与菜品、在快餐店、在咖啡馆
-
-Section 4 电话与电脑
-- Part 1：手机、打电话、发电子邮件
-
-Section 5 人物
-- Part 1 个人信息：个人情况、国籍、生肖与星座、性格、消遣、爱好、职业
-- Part 2 人体：人体、上肢与下肢、头发、眼睛、性与生育、出生、成长与死亡
-- Part 3 感觉、思想与动作：感官与感觉、情感、动作、思想、想象与意愿、能力与行为、动作与活动
-
-Section 6 人与人的关系
-- Part 1 家庭关系：家庭、人生轨迹、家庭与私人生活、婚礼、离婚、友情
-- Part 2 社会结构与群体：社会结构与群体、感官与感觉、不同年龄的群体、一般的社会行为、正面的社会行为、负面的社会行为
-
-Section 7 外表
-- Part 1 服装鞋帽：服装
-
-Section 10 运动健身
-- Part 1 体育运动：体育运动相关、体育比赛、休闲运动、室内运动、户外运动、冬季运动、奥运会、田径运动、游泳池、游泳、潜水、体操、滑雪、瑜伽、武术、在健身房
-- Part 2 球类运动：打篮球、踢足球、打羽毛球、打高尔夫球、打网球、打棒球
-
-Section 11 健康养生
-- Part 1 医院：医院、挂号处、医院科室、门诊室、手术室、医疗中心、病房、药房、产房
-- Part 2 疾病与诊疗：疾病与症状、牙科、儿科、眼科、精神科、健康状况、疾病状况、各种疼痛与精神紊乱、医疗诊断与护理、怀孕与分娩
-
-Section 12 职场工作
-- Part 1 公司构成：公司与法人、成立与解散公司、组织结构、商务头衔与部门、公司部门与头衔
-- Part 2 公司事务：求职面试、一般工作内容、并购与收购、问题与决策、会计术语、财务报表、工作评估与晋升、薪酬与福利
-- Part 3 日常工作：办公室、会议室、电脑
-
-Section 13 教育天地
-- Part 1 学校：学校、学习科目、教室、宿舍、考场、常用文具
-- Part 2 教育相关：文化教育、品行教育
-- Part 3 初中级教育：幼儿园、小学、中学、教育分类及学校、课程、学习、测试
-- Part 4 高等教育：大学、高等教育、学分与学位、高校科目、实验与论文、高等教育学科
-- Part 5 知识学习：电脑、数学、几何、化学、物理、地理、生物、历史、美术
-
-Section 14 政治军事
-- Part 1 行政事务：行政与宪法、政治体制、选举、政体与政党、预算与财政
-- Part 2 外交与战争：外交、国际事务、战争与军事、军队、现代战争
-
-Section 15 节庆假日
-- Part 1 节假日：假日与节庆
-
-Section 16 旅游观光
-- Part 1 出行准备：旅行用品、出行准备、在机场、在飞机上、入境与转机
-- Part 2 餐饮与住宿：餐饮、在酒店
-
-Section 17 自然天地
-- Part 1 宇宙与地球：宇宙、天体、地理地貌、地理景观
-- Part 2 地球生物：鸟类、昆虫、海底生物、丛林生物、极地、草原、热带雨林、沙漠
-- Part 3 自然灾害：地震、台风、暴风雪、火山爆发、火灾、其他灾害
-
-## 单词学习流程
-1. 每次展示一个单词，简洁呈现:
-   - 英文单词（单词前后不添加任何修饰符号*#，）
-   - 询问孩子是否需要例句
-   - 如需例句，提供英文例句并询问是否需要中文翻译
-   - 如需翻译，提供单词和例句的中文含义
-
-2. 学习节奏控制:
-   - 询问孩子是否需要重复几遍单词
-   - 确认孩子已掌握后再进入下一个单词
-   - 每学完5个单词进行一次小组复习
-   - 每学完5组(25个单词)进行一次全面复习
-
-3. 复习方式:
-   - 提供中文释义，让孩子说出对应的英文单词
-   - 孩子回答正确，给予积极鼓励并继续下一个
-   - 孩子回答错误，询问是否需要提示
-   - 提供提示后让孩子再次尝试
-   - 所有单词复习完成后，给予总体评价和鼓励
-
-## 学习体验增强
-1. 使用友好、鼓励的语气，适合儿童学习
-2. 根据孩子的学习情况调整难度和速度
-3. 适时给予积极反馈和鼓励
-4. 使用简单有趣的方式解释单词
-5. 在复习环节可以设计简单的游戏元素增加趣味性
-
-请记住，你的目标是让孩子在轻松愉快的氛围中有效地学习和记忆英语单词。
-"""
-
 from openai.types.chat import ChatCompletionMessageParam
 # 打印配置信息
-Config.print_config()
-messages: list[ChatCompletionMessageParam] = [{"role": "system", "content": sys_prompt}]
+Config().print_config()
+messages: list[ChatCompletionMessageParam] = [{"role": "system", "content": Config().SYS_PROMPT}]
 # 创建一个禁用证书验证的传输层
 transport = httpx.HTTPTransport(verify=False)
 # 使用自定义传输层初始化 OpenAI 客户端
-OPENAI_BASE_URL = Config.OPENAI_BASE_URL
+OPENAI_BASE_URL = Config().OPENAI_BASE_URL
 openai_client = OpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=LLM_API_KEY,
@@ -179,7 +72,7 @@ def echo(audio):
             return
 
         audio_bytes_io = io.BytesIO(audio_bytes)
-        CUSTOM_ASR_URL = Config.CUSTOM_ASR_URL
+        CUSTOM_ASR_URL = Config().CUSTOM_ASR_URL
         # Ensure filename is provided for multipart upload
         files = {'files': ('audio.mp3', audio_bytes_io, 'audio/mp3')}
         # 'keys' and 'lang' seem to be required based on the curl example
@@ -235,7 +128,7 @@ def echo(audio):
         full_response = ""
 
         # Renamed 'stream' to 'completion_stream' to avoid name conflict
-        LLM_MODEL = Config.LLM_MODEL
+        LLM_MODEL = Config().LLM_MODEL
         completion_stream = openai_client.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
@@ -281,11 +174,11 @@ def echo(audio):
             迭代器，每次返回原始音频字节数据
         """
         # 音频参数
-        SAMPLE_RATE = Config.AUDIO_SAMPLE_RATE
+        SAMPLE_RATE = Config().AUDIO_SAMPLE_RATE
         BIT_DEPTH = 16
         CHANNELS = 1
         # 计算缓冲区大小
-        BUFFER_SIZE = int(SAMPLE_RATE * (BIT_DEPTH//8) * CHANNELS * Config.BUFFER_SIZE_FACTOR)
+        BUFFER_SIZE = int(SAMPLE_RATE * (BIT_DEPTH//8) * CHANNELS * Config().BUFFER_SIZE_FACTOR)
         
         # 缓存文本，当达到一定长度或遇到标点符号时发送请求
         text_buffer = ""
@@ -295,7 +188,7 @@ def echo(audio):
         CHECK_INTERVAL = 0.02  # 每20ms检查一次
         
         # 根据TTS类型选择处理逻辑
-        tts_type = Config.TTS_TYPE.lower()
+        tts_type = Config().TTS_TYPE.lower()
         
         # 定义Fast TTS处理函数
         def process_with_fast_tts(text: str) -> Iterator[bytes]:
@@ -308,16 +201,16 @@ def echo(audio):
             # 准备请求数据
             payload = {
                 "text": text,
-                "prompt_audio_path": Config.FAST_TTS_PROMPT_AUDIO,
-                "speed": Config.FAST_TTS_SPEED,
-                "cfg_strength": Config.FAST_TTS_CFG_STRENGTH,
-                "nfe_step": Config.FAST_TTS_NFE_STEP,
+                "prompt_audio_path": Config().FAST_TTS_PROMPT_AUDIO,
+                "speed": Config().FAST_TTS_SPEED,
+                "cfg_strength": Config().FAST_TTS_CFG_STRENGTH,
+                "nfe_step": Config().FAST_TTS_NFE_STEP,
                 "stream": True
             }
             
             try:
                 response = requests.post(
-                    Config.FAST_TTS_URL,
+                    Config().FAST_TTS_URL,
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     stream=True
@@ -347,27 +240,27 @@ def echo(audio):
             
             # 准备请求数据：添加情感提示和模型选择
             # 硅基TTS需要格式：情感提示 <|endofprompt|> 实际文本
-            input_text = f"{Config.SILICONFLOW_TTS_PROMPT}{text}"
+            input_text = f"{Config().SILICONFLOW_TTS_PROMPT}{text}"
             
             payload = {
                 "input": input_text,
-                "response_format": Config.SILICONFLOW_TTS_FORMAT,
-                "sample_rate": Config.SILICONFLOW_TTS_SAMPLE_RATE,
+                "response_format": Config().SILICONFLOW_TTS_FORMAT,
+                "sample_rate": Config().SILICONFLOW_TTS_SAMPLE_RATE,
                 "stream": True,
-                "speed": Config.SILICONFLOW_TTS_SPEED,
-                "gain": Config.SILICONFLOW_TTS_GAIN,
-                "model": Config.SILICONFLOW_TTS_MODEL,
-                "voice": Config.SILICONFLOW_TTS_VOICE
+                "speed": Config().SILICONFLOW_TTS_SPEED,
+                "gain": Config().SILICONFLOW_TTS_GAIN,
+                "model": Config().SILICONFLOW_TTS_MODEL,
+                "voice": Config().SILICONFLOW_TTS_VOICE
             }
             
             headers = {
-                "Authorization": f"Bearer {Config.SILICONFLOW_TTS_TOKEN}",
+                "Authorization": f"Bearer {Config().SILICONFLOW_TTS_TOKEN}",
                 "Content-Type": "application/json"
             }
             
             try:
                 response = requests.post(
-                    Config.SILICONFLOW_TTS_URL,
+                    Config().SILICONFLOW_TTS_URL,
                     json=payload,
                     headers=headers,
                     stream=True
@@ -424,13 +317,13 @@ def echo(audio):
             logging.info(f"使用本地TTS处理文本: {text}")
             
             # 本地TTS服务器配置
-            TTS_SERVER = Config.TTS_SERVER
-            ENDPOINT = Config.TTS_ENDPOINT
+            TTS_SERVER = Config().TTS_SERVER
+            ENDPOINT = Config().TTS_ENDPOINT
             
             # 准备请求数据
             payload = {
                 "text": text,
-                "prompt_text": Config.TTS_PROMPT_TEXT
+                "prompt_text": Config().TTS_PROMPT_TEXT
             }
             
             try:
@@ -621,7 +514,7 @@ def echo(audio):
             audio_array = audio_to_float32(
                 np.frombuffer(audio_chunk, dtype=np.int16)
             )
-            yield (Config.AUDIO_SAMPLE_RATE, audio_array)
+            yield (Config().AUDIO_SAMPLE_RATE, audio_array)
         
         # 只有在未中断的情况下才添加消息历史
         if not check_interrupt() and full_response:
@@ -636,18 +529,18 @@ def echo(audio):
 # 使用配置创建 ReplyOnPause 实例
 reply_on_pause = ReplyOnPause(
     echo,
-    can_interrupt=Config.PAUSE_CAN_INTERRUPT,
+    can_interrupt=Config().PAUSE_CAN_INTERRUPT,
     algo_options=AlgoOptions(
-        audio_chunk_duration=Config.PAUSE_AUDIO_CHUNK_DURATION,
-        started_talking_threshold=Config.PAUSE_STARTED_TALKING_THRESHOLD,
-        speech_threshold=Config.PAUSE_SPEECH_THRESHOLD,
+        audio_chunk_duration=Config().PAUSE_AUDIO_CHUNK_DURATION,
+        started_talking_threshold=Config().PAUSE_STARTED_TALKING_THRESHOLD,
+        speech_threshold=Config().PAUSE_SPEECH_THRESHOLD,
     ),
     model_options=SileroVadOptions(
-        threshold=Config.VAD_THRESHOLD,
-        min_speech_duration_ms=Config.VAD_MIN_SPEECH_DURATION_MS,
-        min_silence_duration_ms=Config.VAD_MIN_SILENCE_DURATION_MS,
-        speech_pad_ms=Config.VAD_SPEECH_PAD_MS,
-        max_speech_duration_s=Config.VAD_MAX_SPEECH_DURATION_S,
+        threshold=Config().VAD_THRESHOLD,
+        min_speech_duration_ms=Config().VAD_MIN_SPEECH_DURATION_MS,
+        min_silence_duration_ms=Config().VAD_MIN_SILENCE_DURATION_MS,
+        speech_pad_ms=Config().VAD_SPEECH_PAD_MS,
+        max_speech_duration_s=Config().VAD_MAX_SPEECH_DURATION_S,
     ),
 )
 
@@ -708,7 +601,7 @@ async def llm_chunks_stream(webrtc_id: str):
 
 # Load SSL certificate and key
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(Config.SSL_CERT_FILE, Config.SSL_KEY_FILE)
+context.load_cert_chain(Config().SSL_CERT_FILE, Config().SSL_KEY_FILE)
 
 stream.mount(app)
 
@@ -728,7 +621,7 @@ if __name__ == "__main__":
     Config.print_config()
     
     uvicorn.run(app, 
-                host=Config.SERVER_HOST, 
-                port=Config.SERVER_PORT, 
-                ssl_certfile=Config.SSL_CERT_FILE, 
+                host=Config().SERVER_HOST,
+                port=Config().SERVER_PORT,
+                ssl_certfile=Config().SSL_CERT_FILE,
                 ssl_keyfile=Config.SSL_KEY_FILE)

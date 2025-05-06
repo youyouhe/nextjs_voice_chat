@@ -8,6 +8,11 @@ export function useSubtitleDisplay() {
   const [subtitleText, setSubtitleText] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
 
+  // 单独处理组件加载状态，只运行一次
+  useEffect(() => {
+    setIsLoaded(true);
+  }, []);
+
   // 当文本变化时更新字幕显示
   useEffect(() => {
     if (currentText) {
@@ -15,12 +20,7 @@ export function useSubtitleDisplay() {
     } else {
       setSubtitleText('');
     }
-    
-    // 确保组件加载完成
-    if (!isLoaded) {
-      setIsLoaded(true);
-    }
-  }, [currentText, isLoaded]);
+  }, [currentText]);
 
   return {
     subtitleText,

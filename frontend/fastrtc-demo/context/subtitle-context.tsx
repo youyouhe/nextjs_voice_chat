@@ -8,6 +8,8 @@ interface SubtitleContextType {
   currentText: string;
   updateSubtitle: (text: string) => void;
   clearSubtitle: () => void;
+  fadeState: string;
+  setFadeState: (state: string) => void;
 }
 
 // 创建上下文
@@ -17,6 +19,7 @@ const SubtitleContext = createContext<SubtitleContextType | undefined>(undefined
 export function SubtitleProvider({ children }: { children: ReactNode }) {
   const [showSubtitle, setShowSubtitle] = useState<boolean>(true);
   const [currentText, setCurrentText] = useState<string>('');
+  const [fadeState, setFadeState] = useState<string>('fade-in');
 
   const updateSubtitle = useCallback((text: string) => {
     setCurrentText(text);
@@ -34,6 +37,8 @@ export function SubtitleProvider({ children }: { children: ReactNode }) {
         currentText,
         updateSubtitle,
         clearSubtitle,
+        fadeState,
+        setFadeState
       }}
     >
       {children}

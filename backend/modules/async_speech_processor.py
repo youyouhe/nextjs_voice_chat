@@ -34,7 +34,8 @@ class AsyncSpeechProcessor:
         # 用于存储LLM处理过程中积累的文本
         self.text_buffer = ""
         # 段落结束标记
-        self.sentence_end_marks = ['。', '！', '？', '!', '?', '.', '\n']
+        # self.sentence_end_marks = ['。', '！', '？', '!', '?', '.', '\n']
+        self.sentence_end_marks = [',','.','，', '!', '?', '。', '！', '？', '\n',':','：']
         # 设定中文和英文的最小段落长度阈值
         self.cn_min_length = 10  # 中文段落最小长度
         self.en_min_length = 40  # 英文段落最小长度
@@ -75,21 +76,28 @@ class AsyncSpeechProcessor:
             # 处理流式返回
             async for chunk in stream:
                 if self.check_interrupt():
-                    logging.info("LLM处理被中断")
+                    logging.info("LLM处理被中断，主动关闭流")
+                    # 使用AsyncOpenAI客户端API取消请求（如果支持）
+                    try:
+                        await stream.aclose()  # 假设存在此方法
+                        logging.info("LLM close，主动关闭流")
+                    except:
+                        logging.info("LLM close，出现异常")
+                        pass
                     break
                 
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
                     segment_buffer += content
-                    logging.info(f"LLM chunk: {content}")
+                    # logging.info(f"LLM chunk: {full_response}")
                     
                     # 检查当前缓冲的文本是否可以作为一个段落发送
                     ready_segment = self._check_segment_ready(segment_buffer)
                     if ready_segment:
                         # 找到合适的分割点
                         cut_index = self._find_segment_break(segment_buffer)
-                        if cut_index > 0:
+                        if cut_index > 4:
                             # 提取段落并清空缓冲
                             current_segment = segment_buffer[:cut_index].strip()
                             segment_buffer = segment_buffer[cut_index:].strip()
@@ -189,6 +197,7 @@ class AsyncSpeechProcessor:
             # 播放所有音频块
             for audio_chunk in audio_chunks:
                 if self.check_interrupt():
+                    logging.info("audio_chunk close，主动关闭流")
                     return
                 
                 # 转换音频格式
@@ -230,6 +239,21 @@ class AsyncSpeechProcessor:
         except Exception as e:
             logging.error(f"处理TTS段落时出错: {str(e)}", exc_info=True)
     
+    # 清空队列的辅助方法
+    async def _clear_queue(self, queue):
+        """清空队列中的所有内容"""
+        try:
+            logging.info(f"开始清空队列，当前内容数量: {queue.qsize()}")
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            logging.info("队列已清空")
+        except Exception as e:
+            logging.error(f"清空队列时出错: {e}")
+    
     async def process_audio_async(self, audio):
         """
         异步处理音频输入，执行完整的语音交互流程
@@ -270,95 +294,185 @@ class AsyncSpeechProcessor:
         # 3. 创建TTS处理器
         tts_processor = TTSProcessor(self.config, self.check_interrupt)
         
-        # 4. 开始处理LLM流和TTS流
-        segment_index = 0
-        total_segments = 0  # 将在处理过程中更新
+        # 4. 实时并行处理LLM和TTS流
+        segment_index = 0  # 当前处理的段落索引
+        received_segments = []  # 已接收的段落列表，用于计算进度
+        is_llm_complete = False  # 标记LLM是否已完成生成
         
-        # 创建两个队列，用于LLM和TTS之间的通信
+        # 创建队列，用于LLM和TTS之间的实时通信
         segment_queue = asyncio.Queue()
         
-        # 创建任务来处理LLM流
+        # 中断处理器 - 监控中断标志并清理资源
+        async def interrupt_handler(check_interval=0.5):
+            while not is_llm_complete:
+                if self.check_interrupt():
+                    logging.info("检测到中断，清理队列和取消任务...")
+                    # 清空队列中的所有段落
+                    await self._clear_queue(segment_queue)
+                    # 添加结束标记到队列，通知TTS处理器退出
+                    await segment_queue.put(None)
+                    return True
+                await asyncio.sleep(check_interval)
+            return False
+                
+        # LLM处理器和TTS处理器作为两个并行任务运行
         async def llm_processor():
+            nonlocal is_llm_complete
             try:
                 async for segment in self.process_llm_stream(async_client, prompt):
                     if self.check_interrupt():
+                        logging.info("LLM处理中断，停止生成")
                         break
-                        
-                    # 将段落放入队列
-                    await segment_queue.put(segment)
                     
-                # 添加结束标记
-                await segment_queue.put(None)
+                    # 将段落放入队列，立即可用于TTS处理
+                    await segment_queue.put(segment)
+                    # 添加到已接收段落列表，用于计算进度
+                    received_segments.append(segment)
+                    logging.info(f"已放入队列段落数：{len(received_segments)}")
+                
+                # 标记LLM处理完成
+                is_llm_complete = True
+                logging.info("LLM处理完成，标记结束")
+                # 添加结束标记到队列
+                if not self.check_interrupt():  # 只有在非中断状态下才添加结束标记
+                    await segment_queue.put(None)
             except Exception as e:
                 logging.error(f"LLM处理器异常: {e}", exc_info=True)
+                is_llm_complete = True
                 await segment_queue.put(None)  # 确保在异常情况下也放入结束标记
         
-        # 创建任务来处理TTS流
+        # TTS处理器 - 处理队列中的段落
         async def tts_processor_task():
             nonlocal segment_index
             try:
-                # 收集所有段落以计算总数
-                segments = []
                 while True:
-                    segment = await segment_queue.get()
-                    if segment is None:
-                        break
-                    segments.append(segment)
-                
-                # 设置总段落数
-                nonlocal total_segments
-                total_segments = len(segments)
-                logging.info(f"总共收集了 {total_segments} 个文本段落")
-                
-                # 处理每个段落
-                for i, segment in enumerate(segments):
+                    # 如果已中断，不再处理新的段落
                     if self.check_interrupt():
+                        logging.info("TTS处理被中断，停止处理队列")
+                        # 清空队列中的所有段落
+                        await self._clear_queue(segment_queue)                        
                         break
                     
-                    # 发送当前文本段
+                    # 从队列获取下一个段落
+                    segment = await segment_queue.get()
+                    
+                    # 检查是否为结束标记
+                    if segment is None:
+                        logging.info("收到队列结束标记，TTS处理完成")
+                        break
+                    
+                    # 再次检查中断，以防在获取段落后被中断
+                    if self.check_interrupt():
+                        logging.info("段落获取后检测到中断，跳过处理")
+                        segment_queue.task_done()
+                        break
+                    
+                    # 计算当前段落索引和总进度
+                    current_index = segment_index
+                    segment_index += 1
+                    total_received = len(received_segments)
+                    
+                    # 基于已知的段落数量计算进度，如果LLM尚未完成，则进度估计为已处理/已接收
+                    progress_percentage = round(current_index * 100 / total_received) if total_received > 0 else 0
+                    
+                    # 发送当前文本段到前端
                     llm_data = {
                         "type": "llm_chunk",
                         "content": segment,
                         "sync_info": {
                             "is_synced": True,
-                            "segment_index": i,
-                            "total_segments": total_segments,
-                            "progress": round(i * 100 / total_segments if total_segments > 0 else 0)
+                            "segment_index": current_index,
+                            "total_segments_so_far": total_received,
+                            "llm_complete": is_llm_complete,
+                            "progress": progress_percentage
                         }
                     }
-                    yield AdditionalOutputs(llm_data)
-                    logging.info(f"发送文本段[{i+1}/{total_segments}]到前端: '{segment}'")
                     
-                    # 生成并播放TTS
+                    yield AdditionalOutputs(llm_data)
+                    # logging.info(f"发送文本段[{current_index+1}/{total_received}+]到前端: '{segment}'")
+                    
+                    # 立即生成并播放TTS音频
                     audio_count = 0
+                    was_interrupted = False
                     async for audio_data in self.process_tts_for_segment(tts_processor, segment):
                         if self.check_interrupt():
+                            logging.info("TTS音频生成过程中被中断")
+                            was_interrupted = True
                             break
                         yield audio_data
                         audio_count += 1
                     
-                    logging.info(f"段落[{i+1}/{total_segments}]播放完成: {audio_count}个音频块")
-                    segment_index = i + 1
+                    # 检查是否在音频生成过程中被中断
+                    if was_interrupted:
+                        logging.info("音频生成被中断，清空剩余队列")
+                        # 标记当前任务已完成
+                        segment_queue.task_done()
+                        # 清空整个队列，放弃剩余内容
+                        await self._clear_queue(segment_queue)
+                        # 跳出主循环，准备新会话
+                        break
+                    else:
+                        # 只有在成功完成时才记录
+                        # logging.info(f"段落[{current_index+1}/{total_received}+]播放完成: {audio_count}个音频块")
+                        # 标记任务已完成
+                        segment_queue.task_done()
                     
-                    # 段落间添加很短的停顿
-                    if i < total_segments - 1:
+                    # 段落间添加很短的停顿，但不会阻塞下一段的处理
+                    if (not is_llm_complete or current_index < total_received - 1) and not self.check_interrupt():
                         await asyncio.sleep(0.05)
                 
-                logging.info("所有文本段和音频处理完成")
+                if not self.check_interrupt():
+                    logging.info(f"所有文本段和音频处理完成，共处理了 {segment_index} 个段落")
+            
             except Exception as e:
                 logging.error(f"TTS处理器异常: {e}", exc_info=True)
         
-        # 启动LLM处理任务
+        # 启动LLM处理任务和中断监控任务
         llm_task = asyncio.create_task(llm_processor())
+        interrupt_task = asyncio.create_task(interrupt_handler())
         
-        # 开始TTS处理
-        async for output in tts_processor_task():
-            yield output
-        
-        # 等待LLM任务完成
-        await llm_task
+        # 直接在主协程中运行TTS处理任务，避免嵌套异步生成器的问题
+        try:
+            # 运行TTS处理任务并转发所有输出
+            async for output in tts_processor_task():
+                yield output
+                
+            # 确保所有任务完成，但不要阻塞主流程
+            pending_tasks = []
+            if not llm_task.done():
+                logging.info("等待LLM任务完成...")
+                pending_tasks.append(llm_task)
+            
+            if not interrupt_task.done():
+                # 取消中断监控任务，因为主处理已完成
+                interrupt_task.cancel()
+            
+            # 等待剩余任务完成
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+                
+        except Exception as e:
+            logging.error(f"主处理流程异常: {e}", exc_info=True)
+            # 确保取消所有任务
+            if not llm_task.done():
+                llm_task.cancel()
+            if not interrupt_task.done():
+                interrupt_task.cancel()
         
     def reset(self):
         """重置处理器，清除消息历史"""
+        # 使用配置中的最新系统提示词
+        self.system_prompt = self.config.SYS_PROMPT
         self.messages = [{"role": "system", "content": self.system_prompt}]
-        logging.info("语音处理器已重置")
+        logging.info("语音处理器已重置，使用最新系统提示词")
+        
+    def update_config(self, new_config):
+        """更新处理器的配置
+        
+        Args:
+            new_config: 新的配置对象
+        """
+        self.config = new_config
+        # 同时更新系统提示词
+        self.system_prompt = self.config.SYS_PROMPT
+        logging.info("语音处理器配置和系统提示词已更新")

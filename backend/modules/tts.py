@@ -4,8 +4,10 @@
 import logging
 import requests
 import time
+import os
 import numpy as np
 from typing import Iterator, List, Optional
+from openai import OpenAI
 
 def audio_to_float32(audio_data: np.ndarray) -> np.ndarray:
     """将音频数据转换为float32格式，范围在[-1.0, 1.0]之间"""
@@ -37,6 +39,9 @@ class TTSProcessor:
         elif tts_type == "fast":
             self._process_func = self._process_with_fast_tts
             logging.info("使用Fast TTS服务")
+        elif tts_type == "kokoro":
+            self._process_func = self._process_with_kokoro_tts
+            logging.info("使用Kokoro TTS服务")
         else:  # 默认使用本地TTS
             self._process_func = self._process_with_local_tts
             logging.info("使用本地TTS服务")
@@ -165,7 +170,10 @@ class TTSProcessor:
                 for chunk in response.iter_content(chunk_size=self.buffer_size):
                     if self.check_interrupt():
                         logging.info("Fast TTS流处理被中断")
-                        return
+                        # 主动关闭连接
+                        if hasattr(response, 'close'):
+                            response.close()
+                        return                        
                     if chunk:
                         logging.debug(f"Fast TTS:输出音频块，大小={len(chunk)}")
                         yield chunk
@@ -174,6 +182,10 @@ class TTSProcessor:
         
         except Exception as e:
             logging.error(f"Fast TTS请求异常: {str(e)}")
+        finally:
+            # 确保连接被关闭
+            if response and hasattr(response, 'close'):
+                response.close()            
     
     def _process_with_siliconflow_tts(self, text: str) -> Iterator[bytes]:
         """使用硅基TTS处理文本并生成音频"""
@@ -184,7 +196,8 @@ class TTSProcessor:
         
         # 准备请求数据：添加情感提示和模型选择
         # 硅基TTS需要格式：情感提示 <|endofprompt|> 实际文本
-        input_text = f"{self.config.SILICONFLOW_TTS_PROMPT}{text}"
+        input_text = f"{text}"
+        # input_text = f"{self.config.SILICONFLOW_TTS_PROMPT}{text}"
         
         payload = {
             "input": input_text,
@@ -249,6 +262,56 @@ class TTSProcessor:
         
         except Exception as e:
             logging.error(f"硅基TTS请求异常: {str(e)}")
+    
+    def _process_with_kokoro_tts(self, text: str) -> Iterator[bytes]:
+        """使用Kokoro TTS处理文本并生成音频"""
+        if not text.strip():
+            return
+            
+        # logging.info(f"使用Kokoro TTS处理文本: {text}")
+        
+        # 创建OpenAI客户端，配置基础URL和API密钥
+        try:
+            client = OpenAI(
+                base_url=self.config.KOKORO_TTS_URL,
+                api_key=self.config.KOKORO_TTS_API_KEY
+            )
+            
+            # 使用流式响应API创建语音，明确指定PCM格式支持
+            # logging.info(f"创建Kokoro TTS流式响应，模型={self.config.KOKORO_TTS_MODEL}, 声音={self.config.KOKORO_TTS_VOICE}, 格式=pcm")
+            
+            # 使用with语句确保资源被正确释放
+            with client.audio.speech.with_streaming_response.create(
+                model=self.config.KOKORO_TTS_MODEL,
+                voice=self.config.KOKORO_TTS_VOICE,
+                input=text,
+                response_format="pcm"  # 指定PCM格式输出
+            ) as response:
+                # 获取流式响应并逐块生成
+                chunk_count = 0
+                start_time = time.time()
+                
+                # 使用配置的buffer_size参数
+                for chunk in response.iter_bytes(chunk_size=self.buffer_size):
+                    if self.check_interrupt():
+                        logging.info("Kokoro TTS流处理被中断")
+                        return
+                    
+                    if not chunk:
+                        continue
+                    
+                    chunk_count += 1
+                    logging.debug(f"Kokoro TTS: 输出音频块 #{chunk_count}，大小={len(chunk)}字节")
+                    yield chunk
+                
+                end_time = time.time()
+                logging.debug(f"Kokoro TTS: 流处理完成，总共输出{chunk_count}个音频块，耗时{end_time-start_time:.2f}秒")
+                    
+        except Exception as e:
+            logging.error(f"Kokoro TTS请求异常: {str(e)}")
+            # 记录更详细的错误信息以便调试
+            import traceback
+            logging.error(traceback.format_exc())
     
     def _process_with_local_tts(self, text: str) -> Iterator[bytes]:
         """使用本地TTS服务处理文本并生成音频"""
